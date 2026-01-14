@@ -55,7 +55,7 @@
 namespace grpc_core {
 namespace {
 
-bool ServerInCIDRRange(const grpc_resolved_address& server_address,
+bool ServerInCIDRRange(const std::string& server_address,
                        absl::string_view cidr_range) {
   std::pair<absl::string_view, absl::string_view> possible_cidr =
       absl::StrSplit(cidr_range, absl::MaxSplits('/', 1), absl::SkipEmpty());
@@ -66,10 +66,14 @@ bool ServerInCIDRRange(const grpc_resolved_address& server_address,
   if (!proxy_address.ok()) {
     return false;
   }
+  auto server_sockaddr = StringToSockaddr(server_address, 0);
+  if (!server_sockaddr.ok()) {
+    return false;
+  }
   uint32_t mask_bits = 0;
   if (absl::SimpleAtoi(possible_cidr.second, &mask_bits)) {
     grpc_sockaddr_mask_bits(&*proxy_address, mask_bits);
-    return grpc_sockaddr_match_subnet(&server_address, &*proxy_address,
+    return grpc_sockaddr_match_subnet(&*server_sockaddr, &*proxy_address,
                                       mask_bits);
   }
   return false;
@@ -82,7 +86,7 @@ bool ExactMatchOrSubdomain(absl::string_view host_name,
 
 // Parses the list of host names, addresses or subnet masks and returns true if
 // the target address or host matches any value.
-bool AddressIncluded(const std::optional<grpc_resolved_address>& target_address,
+bool AddressIncluded(const std::optional<std::string>& target_address,
                      absl::string_view host_name,
                      absl::string_view addresses_and_subnets) {
   for (absl::string_view entry :
@@ -164,18 +168,11 @@ std::optional<std::string> GetChannelArgOrEnvVarValue(
   return GetEnv(env_var);
 }
 
-std::optional<grpc_resolved_address> GetAddressProxyServer(
+std::optional<std::string> GetAddressProxyServer(
     const ChannelArgs& args) {
-  auto address_value = GetChannelArgOrEnvVarValue(
+  auto address = GetChannelArgOrEnvVarValue(
       args, GRPC_ARG_ADDRESS_HTTP_PROXY, HttpProxyMapper::kAddressProxyEnvVar);
-  if (!address_value.has_value()) {
-    return std::nullopt;
-  }
-  auto address = StringToSockaddr(*address_value);
-  if (!address.ok()) {
-    LOG(ERROR) << "cannot parse value of '"
-               << std::string(HttpProxyMapper::kAddressProxyEnvVar)
-               << "' env var. Error: " << address.status().ToString();
+  if (!address.has_value()) {
     return std::nullopt;
   }
   return *address;
@@ -220,10 +217,7 @@ std::optional<std::string> HttpProxyMapper::MapName(
                  "for host '"
               << server_uri << "'";
     } else {
-      auto address = StringToSockaddr(server_host, 0);
-      if (AddressIncluded(address.ok()
-                              ? std::optional<grpc_resolved_address>(*address)
-                              : std::nullopt,
+      if (AddressIncluded(server_host + ":0",
                           server_host, *no_proxy_str)) {
         VLOG(2) << "not using proxy for host in no_proxy list '" << server_uri
                 << "'";
@@ -243,22 +237,15 @@ std::optional<std::string> HttpProxyMapper::MapName(
   return name_to_resolve;
 }
 
-std::optional<grpc_resolved_address> HttpProxyMapper::MapAddress(
-    const grpc_resolved_address& address, ChannelArgs* args) {
+std::optional<std::string> HttpProxyMapper::MapAddress(
+    const std::string& address, ChannelArgs* args) {
   auto proxy_address = GetAddressProxyServer(*args);
   if (!proxy_address.has_value()) {
     return std::nullopt;
   }
-  auto address_string = grpc_sockaddr_to_string(&address, true);
-  if (!address_string.ok()) {
-    LOG(ERROR) << "Unable to convert address to string: "
-               << address_string.status();
-    return std::nullopt;
-  }
   std::string host_name, port;
-  if (!SplitHostPort(*address_string, &host_name, &port)) {
-    LOG(ERROR) << "Address " << *address_string
-               << " cannot be split in host and port";
+  if (!SplitHostPort(address, &host_name, &port)) {
+    LOG(ERROR) << "Address " << address << " cannot be split in host and port";
     return std::nullopt;
   }
   auto enabled_addresses = GetChannelArgOrEnvVarValue(
@@ -268,7 +255,7 @@ std::optional<grpc_resolved_address> HttpProxyMapper::MapAddress(
       !AddressIncluded(address, host_name, *enabled_addresses)) {
     return std::nullopt;
   }
-  *args = args->Set(GRPC_ARG_HTTP_CONNECT_SERVER, *address_string);
+  *args = args->Set(GRPC_ARG_HTTP_CONNECT_SERVER, address);
   return proxy_address;
 }
 

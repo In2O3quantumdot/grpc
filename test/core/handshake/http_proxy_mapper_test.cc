@@ -45,14 +45,8 @@ MATCHER_P(AddressEq, address, absl::StrFormat("is address %s", address)) {
     *result_listener << "is empty";
     return false;
   }
-  auto address_string = grpc_sockaddr_to_string(&arg.value(), true);
-  if (!address_string.ok()) {
-    *result_listener << "unable to convert address to string: "
-                     << address_string.status();
-    return false;
-  }
-  if (*address_string != address) {
-    *result_listener << "value: " << *address_string;
+  if (arg.value() != address) {
+    *result_listener << "value: " << arg.value() << " != " << address;
     return false;
   }
   return true;
@@ -189,9 +183,8 @@ TEST(ProxyForAddressTest, ChannelArgPreferred) {
                   .Set(GRPC_ARG_ADDRESS_HTTP_PROXY, "192.168.0.101:2020")
                   .Set(GRPC_ARG_ADDRESS_HTTP_PROXY_ENABLED_ADDRESSES,
                        "255.255.255.255/0");
-  auto address = StringToSockaddr("192.168.0.1:3333");
-  ASSERT_TRUE(address.ok()) << address.status();
-  EXPECT_THAT(HttpProxyMapper().MapAddress(*address, &args),
+  auto address = "192.168.0.1:3333";
+  EXPECT_THAT(HttpProxyMapper().MapAddress(address, &args),
               AddressEq("192.168.0.101:2020"));
   EXPECT_EQ(args.GetString(GRPC_ARG_HTTP_CONNECT_SERVER), "192.168.0.1:3333");
 }
@@ -203,24 +196,21 @@ TEST(ProxyForAddressTest, AddressesNotIncluded) {
       HttpProxyMapper::kAddressProxyEnabledAddressesEnvVar,
       " 192.168.0.0/24 , 192.168.1.1 , 2001:db8:1::0/48 , 2001:db8:2::5");
   // v4 address
-  auto address = StringToSockaddr("192.168.2.1:3333");
-  ASSERT_TRUE(address.ok()) << address.status();
+  auto address = "192.168.2.1:3333";
   ChannelArgs args;
-  EXPECT_EQ(HttpProxyMapper().MapAddress(*address, &args), std::nullopt);
+  EXPECT_EQ(HttpProxyMapper().MapAddress(address, &args), std::nullopt);
   EXPECT_EQ(args.GetString(GRPC_ARG_HTTP_CONNECT_SERVER), std::nullopt);
   // v6 address
-  address = StringToSockaddr("[2001:db8:2::1]:3000");
-  ASSERT_TRUE(address.ok()) << address.status();
+  address = "[2001:db8:2::1]:3000";
   args = ChannelArgs();
-  EXPECT_EQ(HttpProxyMapper().MapAddress(*address, &args), std::nullopt);
+  EXPECT_EQ(HttpProxyMapper().MapAddress(address, &args), std::nullopt);
   EXPECT_EQ(args.GetString(GRPC_ARG_HTTP_CONNECT_SERVER), std::nullopt);
 }
 
 TEST(ProxyForAddressTest, BadProxy) {
   auto args = ChannelArgs().Set(GRPC_ARG_HTTP_PROXY, "192.168.0.0.100:2020");
-  auto address = StringToSockaddr("192.168.0.1:3333");
-  ASSERT_TRUE(address.ok()) << address.status();
-  EXPECT_EQ(HttpProxyMapper().MapAddress(*address, &args), std::nullopt);
+  auto address = "192.168.0.1:3333";
+  EXPECT_EQ(HttpProxyMapper().MapAddress(address, &args), std::nullopt);
   EXPECT_EQ(args.GetString(GRPC_ARG_HTTP_CONNECT_SERVER), std::nullopt);
 }
 
@@ -267,10 +257,9 @@ TEST_P(IncludedAddressesTest, AddressIncluded) {
       HttpProxyMapper::kAddressProxyEnabledAddressesEnvVar,
       // Whitespaces added to test that they are ignored as expected
       " 192.168.0.0/24 , 192.168.1.1 , 2001:db8:1::0/48 , 2001:db8:2::5");
-  auto address = StringToSockaddr(GetParam());
-  ASSERT_TRUE(address.ok()) << GetParam() << ": " << address.status();
+  const std::string address = std::string(GetParam());
   ChannelArgs args;
-  EXPECT_THAT(HttpProxyMapper().MapAddress(*address, &args),
+  EXPECT_THAT(HttpProxyMapper().MapAddress(address, &args),
               AddressEq("[2001:db8::1111]:2020"));
   EXPECT_EQ(args.GetString(GRPC_ARG_HTTP_CONNECT_SERVER), GetParam());
 }
