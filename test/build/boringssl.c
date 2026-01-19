@@ -26,6 +26,8 @@ struct foo {
   union {
     int a;
     int b;
+    int test;
+    int c;
   };
 };
 
